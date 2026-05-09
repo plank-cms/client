@@ -44,6 +44,9 @@ import plank from "@/lib/plank";
 const { data, total, page, limit } = await plank.collection("posts").findMany();
 ```
 
+Requests are fresh by default. The client uses `fetch(..., { cache: "no-store" })` unless you
+explicitly pass cache options yourself.
+
 With params:
 
 ```ts
@@ -128,9 +131,29 @@ const posts = await plank.fetch("/posts", {
   limit: 5,
   sort: "created_at",
   order: "desc",
-  author_slug: "alejandro-martir",
+  author: "alejandro-martir",
 });
 ```
+
+### Authors
+
+Fetch a public author profile by slug:
+
+```ts
+const author = await plank.fetch("/authors/alejandro-martir");
+```
+
+Filter any collection by public author slug:
+
+```ts
+const { data } = await plank.collection("posts").findMany({
+  author: "alejandro-martir",
+  status: "published",
+});
+```
+
+Public entries may also include `author.slug` and `editor.slug` when those objects are present in
+the API response.
 
 Use `filters[field][operator]` semantics through a plain object:
 
@@ -249,13 +272,25 @@ const drafts = await plank
 
 The client integrates natively with Next.js `fetch` cache options.
 
-### Static (default)
+### Fresh by default
 
-Data cached indefinitely. Ideal for content that rarely changes.
+The client does not cache by default. Every request uses `cache: "no-store"` unless you override
+it.
 
 ```ts
 await plank.collection("posts").findMany();
-// equivalent to fetch(..., { cache: 'force-cache' })
+// equivalent to fetch(..., { cache: "no-store" })
+```
+
+This keeps the client predictable across frameworks and leaves cache strategy to the consuming
+frontend.
+
+### Static / force-cache
+
+Opt in when you want framework-level caching:
+
+```ts
+await plank.collection("posts").findMany({}, { cache: "force-cache" });
 ```
 
 ### ISR — Incremental Static Regeneration
@@ -335,6 +370,7 @@ with `next: { revalidate }`.
 | `status`      | `'published' \| 'draft' \| 'all'` | `'published'` | Filter by status                                              |
 | `sort`        | `string`                          | —             | Field name to sort by                                         |
 | `order`       | `'asc' \| 'desc'`                 | —             | Sort direction                                                |
+| `author`      | `string`                          | —             | Filter collection entries by public author slug               |
 | `filters`     | `PlankFilters`                    | —             | Field-based filters using operator objects                    |
 | `locale`      | `string`                          | —             | Request a localized version of localizable fields (e.g. `es`) |
 | `fallback`    | `string \| string[]`              | —             | Comma-separated fallback locale list (e.g. `en,fr`)           |
