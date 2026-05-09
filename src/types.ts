@@ -16,6 +16,7 @@ export interface PlankParams {
   status?: PlankStatus;
   sort?: string;
   order?: "asc" | "desc";
+  author?: string;
   locale?: string;
   fallback?: string | string[];
   filters?: PlankFilters;

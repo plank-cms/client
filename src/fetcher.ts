@@ -21,7 +21,7 @@ export function createFetcher(
       paramsCopy.locale = defaultLocale;
     }
     const url = buildPlankUrl(baseUrl, endpoint, paramsCopy);
-    const { cache = "force-cache", revalidate } = options;
+    const { cache = "no-store", revalidate } = options;
 
     const fetchOptions: RequestInit & { next?: { revalidate: number } } = {
       headers: { Authorization: `Bearer ${token}` },
