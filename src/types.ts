@@ -79,14 +79,14 @@ export interface PlankClientConfig {
   defaultLocale?: string;
 }
 
-export interface PlankPreviewSyncMessage {
-  source: "plank-preview";
-  type: "plank.preview.sync";
-  url: string;
-}
-
-export interface PlankPreviewBridgeOptions {
-  allowedOrigin: string;
+export interface PlankPreviewSyncWebhookPayload {
+  event: "preview.sync";
+  content_type: string;
+  entry_id: string;
+  status: string | null;
+  slug: string | null;
+  preview_url: string | null;
+  triggered_at: string;
 }
 
 export interface NavigationItem {

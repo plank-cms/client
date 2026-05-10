@@ -266,51 +266,94 @@ const drafts = await plank
   .findMany({ status: "draft" }, { cache: "no-store" });
 ```
 
-### Draft preview bridge
+### Draft preview sync webhook
 
-Plank's admin preview integration works by opening a frontend preview route once, then sending
-`postMessage` sync events after later saves.
+The recommended preview sync integration in v1 is:
 
-The client exposes a browser helper for this:
+1. Plank opens your frontend preview route.
+2. Plank sends a server-side webhook after each save.
+3. Your frontend stores the latest preview sync signal.
+4. The already-open preview tab polls that signal and reloads itself when it changes.
+
+This is the only supported preview-sync flow in v1.
+
+There is no browser bridge, no `postMessage`, and no origin-matching setup in the client package.
+The client only helps you validate the webhook payload. Your frontend is responsible for storing
+the sync signal and reloading the preview tab.
+
+In Plank, configure these preview settings:
+
+- `Enable preview integration`
+- `Preview URL template`
+- `Preview sync webhook URL`
+
+After each entry save, Plank will POST a preview sync payload to your frontend webhook URL while
+preview is enabled.
+
+Webhook payload:
 
 ```ts
-import { attachPlankPreviewBridge } from "@plank-cms/client";
-
-const detach = attachPlankPreviewBridge({
-  allowedOrigin: "https://your-plank-instance.com",
-});
-
-// later, if needed:
-detach();
-```
-
-Use this default behavior for normal integrations. Do not add custom sync logic unless you have a
-specific framework constraint that truly requires it.
-
-Message contract:
-
-```ts
-type PlankPreviewSyncMessage = {
-  source: "plank-preview";
-  type: "plank.preview.sync";
-  url: string;
+type PlankPreviewSyncWebhookPayload = {
+  event: "preview.sync";
+  content_type: string;
+  entry_id: string;
+  status: string | null;
+  slug: string | null;
+  preview_url: string | null;
+  triggered_at: string;
 };
 ```
 
-Default bridge behavior:
+The client exposes a type guard for validating this payload:
 
-- ignores messages from other origins
-- ignores malformed payloads
-- navigates if the incoming URL differs from the current page
-- reloads if the URL is already the same
+```ts
+import { isPlankPreviewSyncWebhookPayload } from "@plank-cms/client";
+```
+
+This is the only preview-sync helper exposed by the client in v1.
+
+#### Frontend implementation contract
+
+Your frontend is expected to implement these pieces:
+
+1. A preview route such as `/draft/[slug]` that fetches directly from Plank with
+   `cache: "no-store"`.
+2. A webhook route that receives `preview.sync`, validates it, and stores the latest sync state.
+3. A lightweight polling endpoint that returns the latest stored sync state for a given preview.
+4. A small browser component on the preview page that polls that endpoint and reloads when the
+   state changes.
+
+Recommended storage for the sync state:
+
+- Redis
+- database table
+- durable KV store
+
+Avoid relying on process memory for production because serverless and multi-instance deployments do
+not guarantee shared state.
+
+#### Official browser refresh strategy for v1
+
+Use polling.
+
+Polling is the official recommendation for v1 because it is framework-agnostic, easy to implement,
+and does not require WebSockets or SSE infrastructure.
+
+The browser flow should be:
+
+1. Open `/draft/[slug]` from Plank.
+2. Poll your own `/api/plank/preview-state/[slug]` endpoint every 1-3 seconds.
+3. Compare the latest `triggered_at` value with the last one seen in the browser.
+4. When it changes, navigate to `preview_url` if it differs from the current URL.
+5. Otherwise call `window.location.reload()`.
 
 #### Next.js App Router example
 
 Create a draft preview route such as `app/draft/[slug]/page.tsx`:
 
 ```ts
+import PreviewAutoRefresh from "@/components/PreviewAutoRefresh";
 import plank from "@/lib/plank";
-import PreviewBridge from "./PreviewBridge";
 import { notFound } from "next/navigation";
 
 export default async function DraftPage({
@@ -337,27 +380,147 @@ export default async function DraftPage({
 
   return (
     <>
-      <PreviewBridge />
+      <PreviewAutoRefresh slug={slug} />
       <article>{post.title}</article>
     </>
   );
 }
 ```
 
-Mount the bridge in a tiny client component:
+Create a durable store for preview sync state.
+
+This example uses an in-memory map to keep the example compact. Replace it with Redis, your
+database, or another shared store before using it in production.
+
+```ts
+// lib/preview-sync-store.ts
+export type PreviewSyncState = {
+  previewUrl: string | null;
+  triggeredAt: string;
+};
+
+const previewSyncStore = new Map<string, PreviewSyncState>();
+
+export async function setPreviewSyncState(
+  slug: string,
+  state: PreviewSyncState,
+) {
+  previewSyncStore.set(slug, state);
+}
+
+export async function getPreviewSyncState(slug: string) {
+  return previewSyncStore.get(slug) ?? null;
+}
+```
+
+Create a webhook route such as `app/api/plank/preview-sync/route.ts`:
+
+```ts
+import { revalidatePath } from "next/cache";
+import { NextResponse } from "next/server";
+import { isPlankPreviewSyncWebhookPayload } from "@plank-cms/client";
+import { setPreviewSyncState } from "@/lib/preview-sync-store";
+
+export async function POST(request: Request) {
+  const body = await request.json().catch(() => null);
+
+  if (!isPlankPreviewSyncWebhookPayload(body)) {
+    return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+  }
+
+  if (body.slug) {
+    revalidatePath(`/draft/${body.slug}`);
+
+    await setPreviewSyncState(body.slug, {
+      previewUrl: body.preview_url,
+      triggeredAt: body.triggered_at,
+    });
+  }
+
+  return NextResponse.json({ ok: true });
+}
+```
+
+Create a polling endpoint such as `app/api/plank/preview-state/[slug]/route.ts`:
+
+```ts
+import { NextResponse } from "next/server";
+import { getPreviewSyncState } from "@/lib/preview-sync-store";
+
+export async function GET(
+  _request: Request,
+  context: { params: Promise<{ slug: string }> },
+) {
+  const { slug } = await context.params;
+  const state = await getPreviewSyncState(slug);
+
+  return NextResponse.json({
+    triggeredAt: state?.triggeredAt ?? null,
+    previewUrl: state?.previewUrl ?? null,
+  });
+}
+```
+
+Mount a polling component in the preview page:
 
 ```tsx
-"use client";
+// components/PreviewAutoRefresh.tsx
+'use client';
 
-import { useEffect } from "react";
-import { attachPlankPreviewBridge } from "@plank-cms/client";
+import { useEffect, useRef } from "react";
 
-export default function PreviewBridge() {
+export default function PreviewAutoRefresh({ slug }: { slug: string }) {
+  const lastTriggeredAtRef = useRef<string | null>(null);
+
   useEffect(() => {
-    return attachPlankPreviewBridge({
-      allowedOrigin: "https://your-plank-instance.com",
-    });
-  }, []);
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/plank/preview-state/${slug}`, {
+          cache: "no-store",
+        });
+
+        if (!response.ok) return;
+
+        const state = (await response.json()) as {
+          triggeredAt: string | null;
+          previewUrl: string | null;
+        };
+
+        if (!state.triggeredAt) return;
+
+        if (!lastTriggeredAtRef.current) {
+          lastTriggeredAtRef.current = state.triggeredAt;
+          return;
+        }
+
+        if (state.triggeredAt !== lastTriggeredAtRef.current) {
+          lastTriggeredAtRef.current = state.triggeredAt;
+
+          if (state.previewUrl && state.previewUrl !== window.location.href) {
+            window.location.assign(state.previewUrl);
+            return;
+          }
+
+          window.location.reload();
+        }
+      } catch {
+        // Ignore transient polling failures.
+      }
+    };
+
+    const interval = window.setInterval(() => {
+      if (!cancelled) void poll();
+    }, 2000);
+
+    void poll();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [slug]);
 
   return null;
 }
@@ -369,6 +532,10 @@ Notes:
 - `status: "all"` is the safest preview default because it also covers entries that are already
   published but have newer saved draft changes in the editor.
 - If your preview route only needs never-published drafts, `status: "draft"` also works.
+- The preview auto-refresh is implemented by your frontend, not by the client package.
+- The recommended v1 approach is webhook plus polling, exactly as shown above.
+- If the slug changes after a save, use `preview_url` from the webhook payload so the browser can
+  navigate to the new preview route instead of only reloading the old one.
 - Secure preview is best implemented in server-capable frontends where the Plank API token stays on
   the server.
 - Pure client-only SPAs are not an officially secure preview target when reusing the same API token

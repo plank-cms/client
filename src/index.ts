@@ -1,16 +1,15 @@
 export { createPlankClient } from './client.js'
-export { attachPlankPreviewBridge } from './preview.js'
+export { isPlankPreviewSyncWebhookPayload } from './preview-webhook.js'
 export { buildPlankUrl } from './url.js'
 export type {
   CollectionClient,
   NavigationItem,
-  PlankPreviewBridgeOptions,
   PlankFieldFilter,
   PlankFilters,
   PlankFilterScalar,
   PlankMedia,
   PlankMediaGallery,
-  PlankPreviewSyncMessage,
+  PlankPreviewSyncWebhookPayload,
   PlankCacheOptions,
   PlankClient,
   PlankClientConfig,
