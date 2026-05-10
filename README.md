@@ -266,6 +266,133 @@ const drafts = await plank
   .findMany({ status: "draft" }, { cache: "no-store" });
 ```
 
+### Draft preview bridge
+
+Plank's admin preview integration works by opening a frontend preview route once, then sending
+`postMessage` sync events after later saves.
+
+The client exposes a browser helper for this:
+
+```ts
+import { attachPlankPreviewBridge } from "@plank-cms/client";
+
+const detach = attachPlankPreviewBridge({
+  allowedOrigin: "https://your-plank-instance.com",
+});
+
+// later, if needed:
+detach();
+```
+
+Message contract:
+
+```ts
+type PlankPreviewSyncMessage = {
+  source: "plank-preview";
+  type: "plank.preview.sync";
+  url: string;
+};
+```
+
+Default bridge behavior:
+
+- ignores messages from other origins
+- ignores malformed payloads
+- navigates if the incoming URL differs from the current page
+- reloads if the URL is already the same
+
+If you want custom behavior, provide `onSync`:
+
+```ts
+attachPlankPreviewBridge({
+  allowedOrigin: "https://your-plank-instance.com",
+  onSync: ({ url }) => {
+    console.log("Sync preview route:", url);
+  },
+});
+```
+
+#### Next.js App Router example
+
+Create a draft preview route such as `app/draft/[slug]/page.tsx`:
+
+```ts
+import plank from "@/lib/plank";
+import PreviewBridge from "./PreviewBridge";
+import { notFound } from "next/navigation";
+
+export default async function DraftPage({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  const { slug } = await params;
+
+  const { data } = await plank.collection("posts").findMany(
+    {
+      limit: 1,
+      status: "all",
+      filters: {
+        slug: { eq: slug },
+      },
+    },
+    { cache: "no-store" },
+  );
+
+  const post = data[0] ?? null;
+
+  if (!post) notFound();
+
+  return (
+    <>
+      <PreviewBridge />
+      <article>{post.title}</article>
+    </>
+  );
+}
+```
+
+Mount the bridge in a tiny client component:
+
+```tsx
+"use client";
+
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { attachPlankPreviewBridge } from "@plank-cms/client";
+
+export default function PreviewBridge() {
+  const router = useRouter();
+
+  useEffect(() => {
+    return attachPlankPreviewBridge({
+      allowedOrigin: "https://your-plank-instance.com",
+      onSync: ({ url }) => {
+        if (url !== window.location.href) {
+          window.location.assign(url);
+          return;
+        }
+
+        router.refresh();
+      },
+    });
+  }, [router]);
+
+  return null;
+}
+```
+
+Notes:
+
+- The preview route should fetch with `cache: "no-store"`.
+- `status: "all"` is the safest preview default because it also covers entries that are already
+  published but have newer saved draft changes in the editor.
+- If your preview route only needs never-published drafts, `status: "draft"` also works.
+- Secure preview is best implemented in server-capable frontends where the Plank API token stays on
+  the server.
+- Pure client-only SPAs are not an officially secure preview target when reusing the same API token
+  model.
+
 ---
 
 ## Next.js App Router cache

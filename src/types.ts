@@ -79,6 +79,17 @@ export interface PlankClientConfig {
   defaultLocale?: string;
 }
 
+export interface PlankPreviewSyncMessage {
+  source: "plank-preview";
+  type: "plank.preview.sync";
+  url: string;
+}
+
+export interface PlankPreviewBridgeOptions {
+  allowedOrigin: string;
+  onSync?: (message: PlankPreviewSyncMessage) => void;
+}
+
 export interface NavigationItem {
   label: string;
   href: string;
