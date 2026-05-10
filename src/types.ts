@@ -87,7 +87,6 @@ export interface PlankPreviewSyncMessage {
 
 export interface PlankPreviewBridgeOptions {
   allowedOrigin: string;
-  onSync?: (message: PlankPreviewSyncMessage) => void;
 }
 
 export interface NavigationItem {

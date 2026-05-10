@@ -284,6 +284,9 @@ const detach = attachPlankPreviewBridge({
 detach();
 ```
 
+Use this default behavior for normal integrations. Do not add custom sync logic unless you have a
+specific framework constraint that truly requires it.
+
 Message contract:
 
 ```ts
@@ -300,17 +303,6 @@ Default bridge behavior:
 - ignores malformed payloads
 - navigates if the incoming URL differs from the current page
 - reloads if the URL is already the same
-
-If you want custom behavior, provide `onSync`:
-
-```ts
-attachPlankPreviewBridge({
-  allowedOrigin: "https://your-plank-instance.com",
-  onSync: ({ url }) => {
-    console.log("Sync preview route:", url);
-  },
-});
-```
 
 #### Next.js App Router example
 
@@ -358,25 +350,14 @@ Mount the bridge in a tiny client component:
 "use client";
 
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { attachPlankPreviewBridge } from "@plank-cms/client";
 
 export default function PreviewBridge() {
-  const router = useRouter();
-
   useEffect(() => {
     return attachPlankPreviewBridge({
       allowedOrigin: "https://your-plank-instance.com",
-      onSync: ({ url }) => {
-        if (url !== window.location.href) {
-          window.location.assign(url);
-          return;
-        }
-
-        router.refresh();
-      },
     });
-  }, [router]);
+  }, []);
 
   return null;
 }

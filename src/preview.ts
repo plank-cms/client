@@ -2,7 +2,6 @@ import type { PlankPreviewBridgeOptions, PlankPreviewSyncMessage } from './types
 
 export function attachPlankPreviewBridge({
   allowedOrigin,
-  onSync,
 }: PlankPreviewBridgeOptions): () => void {
   if (typeof window === 'undefined') {
     return () => {}
@@ -11,11 +10,6 @@ export function attachPlankPreviewBridge({
   function handleMessage(event: MessageEvent) {
     if (event.origin !== allowedOrigin) return
     if (!isPreviewSyncMessage(event.data)) return
-
-    if (onSync) {
-      onSync(event.data)
-      return
-    }
 
     const incomingUrl = normalizeUrl(event.data.url)
     const currentUrl = normalizeUrl(window.location.href)
