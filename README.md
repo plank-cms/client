@@ -10,7 +10,7 @@ pnpm add @plank-cms/client
 
 ## Setup
 
-Create a client instance and export it for reuse across your project:
+Create a client instance and reuse it across your project:
 
 ```ts
 // lib/plank.ts
@@ -19,8 +19,7 @@ import { createPlankClient } from "@plank-cms/client";
 const plank = createPlankClient({
   url: process.env.PLANK_URL!,
   token: process.env.PLANK_TOKEN!,
-  // optional: attach a default locale to all public API requests when not overridden
-  // defaultLocale: 'en',
+  // defaultLocale: "en",
 });
 
 export default plank;
@@ -36,16 +35,13 @@ PLANK_TOKEN=plank_a1b2c3d4...
 
 ### Collections
 
-Fetch a list of entries from a collection type:
-
 ```ts
 import plank from "@/lib/plank";
 
 const { data, total, page, limit } = await plank.collection("posts").findMany();
 ```
 
-Requests are fresh by default. The client uses `fetch(..., { cache: "no-store" })` unless you
-explicitly pass cache options yourself.
+Requests are fresh by default. The client uses `cache: "no-store"` unless you override it.
 
 With params:
 
@@ -54,15 +50,13 @@ const { data } = await plank.collection("posts").findMany({
   page: 1,
   limit: 9,
   status: "published",
-  // any field defined in your content type works as an equality filter
   category: "news",
 });
 ```
 
-Locale / per-request override:
+Locale override:
 
 ```ts
-// if you configured a `defaultLocale` on the client, you can still override it per-request
 const { data: esPosts } = await plank
   .collection("posts")
   .findMany({ locale: "es" });
@@ -71,13 +65,11 @@ const { data: frPosts } = await plank
   .findMany({ locale: "fr" });
 ```
 
-Fetch a single entry by ID:
-
 ```ts
 const post = await plank.collection("posts").findOne("entry-id");
 ```
 
-Fetch a single entry with extra public API params:
+With request params:
 
 ```ts
 const localizedPost = await plank.collection("posts").findOne("entry-id", {
@@ -107,9 +99,6 @@ const homepage = await plank.single("homepage").find({
 
 ### Filtering and sorting
 
-Collection queries accept the built-in public API params plus a `filters` object for field-based
-querying.
-
 ```ts
 const { data } = await plank.collection("posts").findMany({
   status: "published",
@@ -120,6 +109,19 @@ const { data } = await plank.collection("posts").findMany({
   filters: {
     category: { eq: "news" },
     featured: { eq: true },
+  },
+});
+```
+
+Field filters use `filters[field][operator]` semantics:
+
+```ts
+const { data } = await plank.collection("categories").findMany({
+  filters: {
+    slug: {
+      in: ["design", "motion", "branding"],
+      nin: ["internal", "archived"],
+    },
   },
 });
 ```
@@ -154,27 +156,6 @@ const { data } = await plank.collection("posts").findMany({
 
 Public entries may also include `author.slug` and `editor.slug` when those objects are present in
 the API response.
-
-Use `filters[field][operator]` semantics through a plain object:
-
-```ts
-const { data } = await plank.collection("categories").findMany({
-  filters: {
-    slug: {
-      in: ["design", "motion", "branding"],
-      nin: ["internal", "archived"],
-    },
-  },
-});
-
-const featuredPosts = await plank.collection("posts").findMany({
-  status: "published",
-  filters: {
-    featured: { eq: true },
-    category: { ne: "drafts" },
-  },
-});
-```
 
 Build the public API URL without fetching:
 
@@ -214,7 +195,7 @@ const { data } = await plank.collection("posts").findMany({
 });
 ```
 
-Works for collection items, single types, and single-entry fetches:
+Works for collections, single-entry fetches, and single types:
 
 ```ts
 const post = await plank.collection("posts").findOne(
@@ -233,9 +214,7 @@ const homepage = await plank.single("homepage").find({
 Notes:
 
 - `fields`, `select`, and `exclude` are top-level only.
-- They apply to the public serialized response shape, not raw database columns.
 - `select` is an alias of `fields`.
-- `filters` is the standard filtering API.
 - Supported operators are `eq`, `ne`, `in`, and `nin`.
 
 You can still narrow the response locally with TypeScript when useful:
@@ -268,18 +247,9 @@ const drafts = await plank
 
 ### Draft preview sync webhook
 
-The recommended preview sync integration in v1 is:
-
-1. Plank opens your frontend preview route.
-2. Plank sends a server-side webhook after each save.
-3. Your frontend stores the latest preview sync signal.
-4. The already-open preview tab polls that signal and reloads itself when it changes.
-
-This is the only supported preview-sync flow in v1.
-
-There is no browser bridge, no `postMessage`, and no origin-matching setup in the client package.
-The client only helps you validate the webhook payload. Your frontend is responsible for storing
-the sync signal and reloading the preview tab.
+The client only provides a type guard for the preview sync webhook payload. The frontend is
+responsible for handling the webhook, exposing a small polling endpoint, and reloading the preview
+tab.
 
 In Plank, configure these preview settings:
 
@@ -304,61 +274,36 @@ type PlankPreviewSyncWebhookPayload = {
 };
 ```
 
-The client exposes a type guard for validating this payload:
+Validate it with:
 
 ```ts
 import { isPlankPreviewSyncWebhookPayload } from "@plank-cms/client";
 ```
 
-This is the only preview-sync helper exposed by the client in v1.
+Route pattern:
 
-#### Frontend implementation contract
+```text
+/draft/[contentType]/[slug]
+```
 
-Your frontend is expected to implement these pieces:
+Flow:
 
-1. A preview route such as `/draft/[contentType]/[slug]` that fetches directly from Plank with
-   `cache: "no-store"`.
-2. A webhook route that receives `preview.sync`, validates it, and stores the latest sync state.
-3. A lightweight polling endpoint that returns the latest stored sync state for a given preview.
-4. A small browser component on the preview page that polls that endpoint and reloads when the
-   state changes.
-
-Recommended storage for the sync state:
-
-- Redis
-- database table
-- durable KV store
-
-Avoid relying on process memory for production because serverless and multi-instance deployments do
-not guarantee shared state.
-
-#### Official browser refresh strategy for v1
-
-Use polling.
-
-Polling is the official recommendation for v1 because it is framework-agnostic, easy to implement,
-and does not require WebSockets or SSE infrastructure.
-
-The browser flow should be:
-
-1. Open `/draft/[contentType]/[slug]` from Plank.
-2. Poll your own `/api/plank/preview-state/[contentType]/[slug]` endpoint every 1-3 seconds.
-3. Compare the latest `triggered_at` value with the last one seen in the browser.
-4. When it changes, navigate to `preview_url` if it differs from the current URL.
-5. Otherwise call `window.location.reload()`.
+1. Plank opens `/draft/[contentType]/[slug]`.
+2. Plank sends `preview.sync` to your webhook after each save.
+3. Your webhook stores the latest sync state in memory, keyed by `contentType + slug`.
+4. The preview page polls `/api/plank/preview-state/[contentType]/[slug]`.
+5. The browser compares `triggered_at` with the last value in `localStorage`.
+6. If `preview_url` changed, navigate to it. Otherwise reload the page.
 
 #### Next.js App Router example
 
-Use a route that includes both the content type and the entry slug. This avoids collisions when
-different collection types can reuse the same slug.
-
-In Plank, a good matching template is:
+Template in Plank:
 
 ```text
 https://frontend.example.com/draft/{contentType}/{slug}
 ```
 
-Create a draft preview route such as `app/draft/[contentType]/[slug]/page.tsx`:
+Preview route:
 
 ```ts
 import PreviewAutoRefresh from "@/components/PreviewAutoRefresh";
@@ -396,10 +341,7 @@ export default async function DraftPage({
 }
 ```
 
-Create a durable store for preview sync state.
-
-This example uses an in-memory map to keep the example compact. Replace it with Redis, your
-database, or another shared store before using it in production.
+In-memory sync store:
 
 ```ts
 // lib/preview-sync-store.ts
@@ -427,7 +369,7 @@ export async function getPreviewSyncState(contentType: string, slug: string) {
 }
 ```
 
-Create a webhook route such as `app/api/plank/preview-sync/route.ts`:
+Webhook route:
 
 ```ts
 import { revalidatePath } from "next/cache";
@@ -455,7 +397,7 @@ export async function POST(request: Request) {
 }
 ```
 
-Create a polling endpoint such as `app/api/plank/preview-state/[contentType]/[slug]/route.ts`:
+Polling endpoint:
 
 ```ts
 import { NextResponse } from "next/server";
@@ -475,13 +417,13 @@ export async function GET(
 }
 ```
 
-Mount a polling component in the preview page:
+Preview polling component:
 
 ```tsx
 // components/PreviewAutoRefresh.tsx
 'use client';
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 
 export default function PreviewAutoRefresh({
   contentType,
@@ -490,10 +432,9 @@ export default function PreviewAutoRefresh({
   contentType: string;
   slug: string;
 }) {
-  const lastTriggeredAtRef = useRef<string | null>(null);
-
   useEffect(() => {
     let cancelled = false;
+    const storageKey = `plank-preview:${contentType}:${slug}`;
 
     const poll = async () => {
       try {
@@ -511,21 +452,23 @@ export default function PreviewAutoRefresh({
 
         if (!state.triggeredAt) return;
 
-        if (!lastTriggeredAtRef.current) {
-          lastTriggeredAtRef.current = state.triggeredAt;
+        const lastTriggeredAt = window.localStorage.getItem(storageKey);
+
+        if (!lastTriggeredAt) {
+          window.localStorage.setItem(storageKey, state.triggeredAt);
           return;
         }
 
-        if (state.triggeredAt !== lastTriggeredAtRef.current) {
-          lastTriggeredAtRef.current = state.triggeredAt;
+        if (state.triggeredAt === lastTriggeredAt) return;
 
-          if (state.previewUrl && state.previewUrl !== window.location.href) {
-            window.location.assign(state.previewUrl);
-            return;
-          }
+        window.localStorage.setItem(storageKey, state.triggeredAt);
 
-          window.location.reload();
+        if (state.previewUrl && state.previewUrl !== window.location.href) {
+          window.location.assign(state.previewUrl);
+          return;
         }
+
+        window.location.reload();
       } catch {
         // Ignore transient polling failures.
       }
@@ -549,43 +492,24 @@ export default function PreviewAutoRefresh({
 
 Notes:
 
-- The preview route should fetch with `cache: "no-store"`.
-- The recommended v1 route pattern is `/draft/[contentType]/[slug]`.
-- Key your preview sync state by both `contentType` and `slug`, not by `slug` alone.
-- `status: "all"` is the safest preview default because it also covers entries that are already
-  published but have newer saved draft changes in the editor.
-- If your preview route only needs never-published drafts, `status: "draft"` also works.
-- The preview auto-refresh is implemented by your frontend, not by the client package.
-- The recommended v1 approach is webhook plus polling, exactly as shown above.
-- If the slug changes after a save, use `preview_url` from the webhook payload so the browser can
-  navigate to the new preview route instead of only reloading the old one.
-- Secure preview is best implemented in server-capable frontends where the Plank API token stays on
-  the server.
-- Pure client-only SPAs are not an officially secure preview target when reusing the same API token
-  model.
+- Use `/draft/[contentType]/[slug]`.
+- Fetch preview content with `cache: "no-store"` and `status: "all"`.
+- Key preview sync state by both `contentType` and `slug`.
+- If `preview_url` changes after a save, navigate to it instead of only reloading.
 
 ---
 
 ## Next.js App Router cache
 
-The client integrates natively with Next.js `fetch` cache options.
-
 ### Fresh by default
 
-The client does not cache by default. Every request uses `cache: "no-store"` unless you override
-it.
+Every request uses `cache: "no-store"` unless you override it.
 
 ```ts
 await plank.collection("posts").findMany();
-// equivalent to fetch(..., { cache: "no-store" })
 ```
 
-This keeps the client predictable across frameworks and leaves cache strategy to the consuming
-frontend.
-
 ### Static / force-cache
-
-Opt in when you want framework-level caching:
 
 ```ts
 await plank.collection("posts").findMany({}, { cache: "force-cache" });
@@ -604,8 +528,6 @@ await plank.single("homepage").find({}, { revalidate: 86400 });
 ```
 
 ### No cache
-
-Always fetch fresh data. Useful for previews or highly dynamic content:
 
 ```ts
 await plank.collection("posts").findMany({}, { cache: "no-store" });
@@ -649,13 +571,8 @@ interface Homepage {
 
 ## Framework support
 
-The client is framework-agnostic. It is not tied to React and can be used anywhere standard
-`fetch` is available, including Next.js, Astro, Remix, SvelteKit, Node.js, or plain server-side
-JavaScript/TypeScript.
-
-The only framework-specific part in this README is the caching section: the `cache` and
-`revalidate` examples map especially well to Next.js App Router because Next extends `fetch`
-with `next: { revalidate }`.
+The client is framework-agnostic and works anywhere standard `fetch` is available, including
+Next.js, Astro, Remix, SvelteKit, Node.js, or plain server-side JavaScript/TypeScript.
 
 ---
 
@@ -680,13 +597,13 @@ with `next: { revalidate }`.
 
 ## Low-level API
 
-For full control, use `fetch` and `buildUrl` directly:
+Use `fetch` and `buildUrl` directly when you need full control:
 
 ```ts
 // raw fetch
 const data = await plank.fetch("/posts", { limit: 5 }, { revalidate: 300 });
 
-// build URL without fetching (useful for debugging or custom fetch logic)
+// build URL without fetching
 const url = plank.buildUrl("/posts", { category: "news", limit: 10 });
 // https://your-plank-instance.com/api/posts?category=news&limit=10
 ```
