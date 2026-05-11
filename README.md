@@ -316,7 +316,7 @@ This is the only preview-sync helper exposed by the client in v1.
 
 Your frontend is expected to implement these pieces:
 
-1. A preview route such as `/draft/[slug]` that fetches directly from Plank with
+1. A preview route such as `/draft/[contentType]/[slug]` that fetches directly from Plank with
    `cache: "no-store"`.
 2. A webhook route that receives `preview.sync`, validates it, and stores the latest sync state.
 3. A lightweight polling endpoint that returns the latest stored sync state for a given preview.
@@ -341,15 +341,24 @@ and does not require WebSockets or SSE infrastructure.
 
 The browser flow should be:
 
-1. Open `/draft/[slug]` from Plank.
-2. Poll your own `/api/plank/preview-state/[slug]` endpoint every 1-3 seconds.
+1. Open `/draft/[contentType]/[slug]` from Plank.
+2. Poll your own `/api/plank/preview-state/[contentType]/[slug]` endpoint every 1-3 seconds.
 3. Compare the latest `triggered_at` value with the last one seen in the browser.
 4. When it changes, navigate to `preview_url` if it differs from the current URL.
 5. Otherwise call `window.location.reload()`.
 
 #### Next.js App Router example
 
-Create a draft preview route such as `app/draft/[slug]/page.tsx`:
+Use a route that includes both the content type and the entry slug. This avoids collisions when
+different collection types can reuse the same slug.
+
+In Plank, a good matching template is:
+
+```text
+https://frontend.example.com/draft/{contentType}/{slug}
+```
+
+Create a draft preview route such as `app/draft/[contentType]/[slug]/page.tsx`:
 
 ```ts
 import PreviewAutoRefresh from "@/components/PreviewAutoRefresh";
@@ -359,11 +368,11 @@ import { notFound } from "next/navigation";
 export default async function DraftPage({
   params,
 }: {
-  params: Promise<{ slug: string }>;
+  params: Promise<{ contentType: string; slug: string }>;
 }) {
-  const { slug } = await params;
+  const { contentType, slug } = await params;
 
-  const { data } = await plank.collection("posts").findMany(
+  const { data } = await plank.collection(contentType).findMany(
     {
       limit: 1,
       status: "all",
@@ -380,7 +389,7 @@ export default async function DraftPage({
 
   return (
     <>
-      <PreviewAutoRefresh slug={slug} />
+      <PreviewAutoRefresh contentType={contentType} slug={slug} />
       <article>{post.title}</article>
     </>
   );
@@ -401,15 +410,20 @@ export type PreviewSyncState = {
 
 const previewSyncStore = new Map<string, PreviewSyncState>();
 
+export function buildPreviewSyncKey(contentType: string, slug: string) {
+  return `${contentType}:${slug}`;
+}
+
 export async function setPreviewSyncState(
+  contentType: string,
   slug: string,
   state: PreviewSyncState,
 ) {
-  previewSyncStore.set(slug, state);
+  previewSyncStore.set(buildPreviewSyncKey(contentType, slug), state);
 }
 
-export async function getPreviewSyncState(slug: string) {
-  return previewSyncStore.get(slug) ?? null;
+export async function getPreviewSyncState(contentType: string, slug: string) {
+  return previewSyncStore.get(buildPreviewSyncKey(contentType, slug)) ?? null;
 }
 ```
 
@@ -429,9 +443,9 @@ export async function POST(request: Request) {
   }
 
   if (body.slug) {
-    revalidatePath(`/draft/${body.slug}`);
+    revalidatePath(`/draft/${body.content_type}/${body.slug}`);
 
-    await setPreviewSyncState(body.slug, {
+    await setPreviewSyncState(body.content_type, body.slug, {
       previewUrl: body.preview_url,
       triggeredAt: body.triggered_at,
     });
@@ -441,7 +455,7 @@ export async function POST(request: Request) {
 }
 ```
 
-Create a polling endpoint such as `app/api/plank/preview-state/[slug]/route.ts`:
+Create a polling endpoint such as `app/api/plank/preview-state/[contentType]/[slug]/route.ts`:
 
 ```ts
 import { NextResponse } from "next/server";
@@ -449,10 +463,10 @@ import { getPreviewSyncState } from "@/lib/preview-sync-store";
 
 export async function GET(
   _request: Request,
-  context: { params: Promise<{ slug: string }> },
+  context: { params: Promise<{ contentType: string; slug: string }> },
 ) {
-  const { slug } = await context.params;
-  const state = await getPreviewSyncState(slug);
+  const { contentType, slug } = await context.params;
+  const state = await getPreviewSyncState(contentType, slug);
 
   return NextResponse.json({
     triggeredAt: state?.triggeredAt ?? null,
@@ -469,7 +483,13 @@ Mount a polling component in the preview page:
 
 import { useEffect, useRef } from "react";
 
-export default function PreviewAutoRefresh({ slug }: { slug: string }) {
+export default function PreviewAutoRefresh({
+  contentType,
+  slug,
+}: {
+  contentType: string;
+  slug: string;
+}) {
   const lastTriggeredAtRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -477,9 +497,10 @@ export default function PreviewAutoRefresh({ slug }: { slug: string }) {
 
     const poll = async () => {
       try {
-        const response = await fetch(`/api/plank/preview-state/${slug}`, {
-          cache: "no-store",
-        });
+        const response = await fetch(
+          `/api/plank/preview-state/${contentType}/${slug}`,
+          { cache: "no-store" },
+        );
 
         if (!response.ok) return;
 
@@ -520,7 +541,7 @@ export default function PreviewAutoRefresh({ slug }: { slug: string }) {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [slug]);
+  }, [contentType, slug]);
 
   return null;
 }
@@ -529,6 +550,8 @@ export default function PreviewAutoRefresh({ slug }: { slug: string }) {
 Notes:
 
 - The preview route should fetch with `cache: "no-store"`.
+- The recommended v1 route pattern is `/draft/[contentType]/[slug]`.
+- Key your preview sync state by both `contentType` and `slug`, not by `slug` alone.
 - `status: "all"` is the safest preview default because it also covers entries that are already
   published but have newer saved draft changes in the editor.
 - If your preview route only needs never-published drafts, `status: "draft"` also works.
